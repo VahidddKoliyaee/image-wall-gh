@@ -10,8 +10,7 @@ import json
 def get_repo_root(repo_root_input=None):
     """Resolve the repo root path. Works in GH and standalone."""
     if repo_root_input:
-        return str(repo_root_input).strip().strip('"').strip("'")
-    # Fallback: assume scripts/ is one level inside repo
+        return str(repo_root_input).strip().strip('"').replace("\\", "/")
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def load_config(repo_root):
