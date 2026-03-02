@@ -18,7 +18,7 @@ import sys
 import struct
 import imghdr
 
-_repo = str(repo_root).strip().strip('"') if repo_root else ""
+_repo = str(repo_root).strip().strip('"').replace("\\", "/")
 _scripts_dir = os.path.join(_repo, "scripts")
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)

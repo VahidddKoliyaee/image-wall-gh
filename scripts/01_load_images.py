@@ -16,7 +16,7 @@ import os
 import sys
 
 # --- Resolve paths ---
-_repo = str(repo_root).strip().strip('"') if repo_root else ""
+_repo = str(repo_root).strip().strip('"').replace("\\", "/") if repo_root else ""
 if not _repo:
     status = "ERROR: Set repo_root panel to your clone path"
     image_paths = []
