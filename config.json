@@ -1,0 +1,20 @@
+{
+    "grid_columns": 4,
+    "cell_spacing_mm": 10,
+    "cell_width_mm": 200,
+    "maintain_aspect_ratio": true,
+    "background_color": [
+        255,
+        255,
+        255
+    ],
+    "border_width_mm": 2,
+    "border_color": [
+        30,
+        30,
+        30
+    ],
+    "output_dpi": 300,
+    "output_format": "png",
+    "wall_padding_mm": 20
+}

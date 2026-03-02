@@ -1,0 +1,205 @@
+{
+    "components": [
+        {
+            "id": "01_load_images",
+            "script": "scripts/01_load_images.py",
+            "inputs": {
+                "repo_root": {
+                    "type": "str",
+                    "source": "REPO_ROOT_PANEL"
+                },
+                "img_folder": {
+                    "type": "str",
+                    "source": "IMG_FOLDER_PANEL",
+                    "optional": true
+                }
+            },
+            "outputs": {
+                "image_paths": {
+                    "type": "list"
+                },
+                "count": {
+                    "type": "int"
+                },
+                "status": {
+                    "type": "str"
+                }
+            }
+        },
+        {
+            "id": "02_analyze_images",
+            "script": "scripts/02_analyze_images.py",
+            "inputs": {
+                "repo_root": {
+                    "type": "str",
+                    "source": "REPO_ROOT_PANEL"
+                },
+                "image_paths": {
+                    "type": "list",
+                    "source": "01_load_images.image_paths"
+                }
+            },
+            "outputs": {
+                "widths": {
+                    "type": "list"
+                },
+                "heights": {
+                    "type": "list"
+                },
+                "aspects": {
+                    "type": "list"
+                },
+                "orientations": {
+                    "type": "list"
+                },
+                "status": {
+                    "type": "str"
+                }
+            }
+        },
+        {
+            "id": "03_grid_layout",
+            "script": "scripts/03_grid_layout.py",
+            "inputs": {
+                "repo_root": {
+                    "type": "str",
+                    "source": "REPO_ROOT_PANEL"
+                },
+                "aspects": {
+                    "type": "list",
+                    "source": "02_analyze_images.aspects"
+                },
+                "count": {
+                    "type": "int",
+                    "source": "01_load_images.count"
+                },
+                "columns_override": {
+                    "type": "int",
+                    "source": "COLUMNS_PANEL",
+                    "optional": true
+                }
+            },
+            "outputs": {
+                "origins_x": {
+                    "type": "list"
+                },
+                "origins_y": {
+                    "type": "list"
+                },
+                "cell_widths": {
+                    "type": "list"
+                },
+                "cell_heights": {
+                    "type": "list"
+                },
+                "wall_width": {
+                    "type": "float"
+                },
+                "wall_height": {
+                    "type": "float"
+                },
+                "status": {
+                    "type": "str"
+                }
+            }
+        },
+        {
+            "id": "04_build_wall",
+            "script": "scripts/04_build_wall.py",
+            "inputs": {
+                "repo_root": {
+                    "type": "str",
+                    "source": "REPO_ROOT_PANEL"
+                },
+                "image_paths": {
+                    "type": "list",
+                    "source": "01_load_images.image_paths"
+                },
+                "origins_x": {
+                    "type": "list",
+                    "source": "03_grid_layout.origins_x"
+                },
+                "origins_y": {
+                    "type": "list",
+                    "source": "03_grid_layout.origins_y"
+                },
+                "cell_widths": {
+                    "type": "list",
+                    "source": "03_grid_layout.cell_widths"
+                },
+                "cell_heights": {
+                    "type": "list",
+                    "source": "03_grid_layout.cell_heights"
+                },
+                "wall_width": {
+                    "type": "float",
+                    "source": "03_grid_layout.wall_width"
+                },
+                "wall_height": {
+                    "type": "float",
+                    "source": "03_grid_layout.wall_height"
+                }
+            },
+            "outputs": {
+                "frames": {
+                    "type": "list"
+                },
+                "bg_surface": {
+                    "type": "surface"
+                },
+                "picture_frames": {
+                    "type": "list"
+                },
+                "labels": {
+                    "type": "list"
+                },
+                "status": {
+                    "type": "str"
+                }
+            }
+        },
+        {
+            "id": "05_export_wall",
+            "script": "scripts/05_export_wall.py",
+            "inputs": {
+                "repo_root": {
+                    "type": "str",
+                    "source": "REPO_ROOT_PANEL"
+                },
+                "wall_width": {
+                    "type": "float",
+                    "source": "03_grid_layout.wall_width"
+                },
+                "wall_height": {
+                    "type": "float",
+                    "source": "03_grid_layout.wall_height"
+                },
+                "export_name": {
+                    "type": "str",
+                    "source": "EXPORT_NAME_PANEL"
+                },
+                "do_export": {
+                    "type": "bool",
+                    "source": "EXPORT_TOGGLE"
+                }
+            },
+            "outputs": {
+                "output_path": {
+                    "type": "str"
+                },
+                "status": {
+                    "type": "str"
+                }
+            }
+        }
+    ]
+}
+```
+
+---
+
+## File 11: `mcp_server/requirements.txt`
+```
+rhino3dm>=8.0.0
+Pillow>=10.0.0
+mcp>=1.0.0
