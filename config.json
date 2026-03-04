@@ -16,5 +16,7 @@
     ],
     "output_dpi": 300,
     "output_format": "png",
-    "wall_padding_mm": 20
+    "wall_padding_mm": 20,
+    "min_radius_mm": 20,
+    "max_radius_mm": 100
 }

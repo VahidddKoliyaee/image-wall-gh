@@ -18,7 +18,7 @@ import sys
 import Rhino
 import scriptcontext as sc
 
-_repo = str(repo_root).strip().strip('"').replace("\\", "/")
+_repo = str(repo_root).strip().strip('"') if repo_root else ""
 _scripts_dir = os.path.join(_repo, "scripts")
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)

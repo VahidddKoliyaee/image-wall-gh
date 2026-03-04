@@ -1,79 +1,119 @@
-"""
-03_grid_layout.py — Compute 2D grid positions for the image wall.
-
-=== GRASSHOPPER COMPONENT SETUP ===
-Inputs:
-    repo_root   (str)   - Repo root path
-    aspects     (list)  - Aspect ratios from 02_analyze_images
-    count       (int)   - Number of images
-    columns_override (int) - Optional column count override (0 = use config)
-Outputs:
-    origins_x   (list)  - X coordinates of each cell origin (bottom-left)
-    origins_y   (list)  - Y coordinates of each cell origin (bottom-left)
-    cell_widths (list)  - Width of each cell in mm
-    cell_heights(list)  - Height of each cell in mm
-    wall_width  (float) - Total wall width
-    wall_height (float) - Total wall height
-    status      (str)
-"""
+# 03_grid_layout.py - Circle packing layout based on image pixel widths.
+# Inputs: repo_root (str), widths (list), heights (list), count (int), columns_override (int)
+# Outputs: origins_x, origins_y, radii, wall_width, wall_height, status
 
 import os
 import sys
 import math
 
-_repo = str(repo_root).strip().strip('"').replace("\\", "/")
+_repo = str(repo_root).strip().strip('"').replace("\\", "/") if repo_root else ""
 _scripts_dir = os.path.join(_repo, "scripts")
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from utils import load_config
-
 config = load_config(_repo)
 
-cols = int(columns_override) if columns_override and int(columns_override) > 0 else config["grid_columns"]
-cell_w = float(config["cell_width_mm"])
-spacing = float(config["cell_spacing_mm"])
 padding = float(config.get("wall_padding_mm", 20))
-keep_aspect = config["maintain_aspect_ratio"]
+min_radius = float(config.get("min_radius_mm", 20))
+max_radius = float(config.get("max_radius_mm", 100))
 
-n = int(count) if count else 0
+def to_list(val):
+    if val is None:
+        return []
+    if isinstance(val, (list, tuple)):
+        return list(val)
+    return [val]
+
+_widths = to_list(widths)
+n = len(_widths)
 
 if n == 0:
     origins_x = []
     origins_y = []
-    cell_widths = []
-    cell_heights = []
+    radii = []
     wall_width = 0
     wall_height = 0
     status = "No images"
 else:
-    rows = int(math.ceil(float(n) / float(cols)))
+    # Map pixel widths to radii (linear scale between min and max radius)
+    w_min = float(min(_widths))
+    w_max = float(max(_widths))
+    w_range = w_max - w_min if w_max > w_min else 1.0
 
-    origins_x = []
-    origins_y = []
-    cell_widths = []
-    cell_heights = []
+    radii = []
+    for w in _widths:
+        t = (float(w) - w_min) / w_range
+        r = min_radius + t * (max_radius - min_radius)
+        radii.append(round(r, 3))
 
-    for i in range(n):
-        col = i % cols
-        row = rows - 1 - (i // cols)  # top-to-bottom, row 0 at top
+    # Sort by radius descending (pack big circles first)
+    indexed = sorted(enumerate(radii), key=lambda x: -x[1])
 
-        x = padding + col * (cell_w + spacing)
+    # Circle packing algorithm (greedy front-chain approach)
+    placed_x = [0.0] * n
+    placed_y = [0.0] * n
+    placed_r = [0.0] * n
+    placed_count = 0
 
-        if keep_aspect and i < len(aspects):
-            ar = float(aspects[i])
-            cell_h = cell_w / ar if ar > 0 else cell_w
-        else:
-            cell_h = cell_w  # square fallback
+    for idx, r in indexed:
+        if placed_count == 0:
+            # Place first circle at origin
+            placed_x[idx] = padding + r
+            placed_y[idx] = padding + r
+            placed_r[idx] = r
+            placed_count += 1
+            continue
 
-        # For uniform row height, use max height in that row
-        y = padding + row * (cell_w + spacing)  # simplified uniform grid
+        # Try to place touching an existing circle, as close to origin as possible
+        best_x = 0
+        best_y = 0
+        best_dist = float("inf")
 
-        origins_x.append(round(x, 3))
-        origins_y.append(round(y, 3))
-        cell_widths.append(round(cell_w, 3))
-        cell_heights.append(round(cell_h, 3))
+        # Try positions around each already-placed circle
+        for j in range(n):
+            if placed_r[j] == 0:
+                continue
+            # Try angles around circle j
+            for angle_deg in range(0, 360, 15):
+                angle = math.radians(angle_deg)
+                cx = placed_x[j] + (placed_r[j] + r + 2) * math.cos(angle)
+                cy = placed_y[j] + (placed_r[j] + r + 2) * math.sin(angle)
 
-    wall_width = round(padding * 2 + cols * cell_w + (cols - 1) * spacing, 3)
-    wall_height = round(padding * 2 + rows * cell_w + (rows - 1) * spacing, 3)
-    status = "OK: {}x{} grid, wall={}x{}mm".format(cols, rows, wall_width, wall_height)
+                # Check no overlap with any placed circle
+                overlap = False
+                for k in range(n):
+                    if placed_r[k] == 0:
+                        continue
+                    dx = cx - placed_x[k]
+                    dy = cy - placed_y[k]
+                    dist = math.sqrt(dx * dx + dy * dy)
+                    if dist < (r + placed_r[k] + 1):
+                        overlap = True
+                        break
+
+                if not overlap:
+                    # Prefer positions closest to center
+                    d = math.sqrt(cx * cx + cy * cy)
+                    if d < best_dist:
+                        best_dist = d
+                        best_x = cx
+                        best_y = cy
+
+        placed_x[idx] = round(best_x, 3)
+        placed_y[idx] = round(best_y, 3)
+        placed_r[idx] = r
+        placed_count += 1
+
+    # Shift everything so minimum x,y starts at padding
+    min_x = min(placed_x[i] - radii[i] for i in range(n))
+    min_y = min(placed_y[i] - radii[i] for i in range(n))
+    origins_x = [round(placed_x[i] - min_x + padding, 3) for i in range(n)]
+    origins_y = [round(placed_y[i] - min_y + padding, 3) for i in range(n)]
+
+    max_x = max(origins_x[i] + radii[i] for i in range(n))
+    max_y = max(origins_y[i] + radii[i] for i in range(n))
+    wall_width = round(max_x + padding, 3)
+    wall_height = round(max_y + padding, 3)
+
+    status = "OK: Packed {} circles, wall={}x{}mm".format(n, wall_width, wall_height)

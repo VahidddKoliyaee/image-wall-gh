@@ -1,32 +1,12 @@
-# Outputs (regenerated)
-output/*.png
-output/*.pdf
-output/*.jpg
-
-# Keep folders
-!output/.gitkeep
-!images/.gitkeep
-
-# Large images (use Git LFS or don't track)
-# images/*.png
-# images/*.jpg
-
-# Rhino temp
-*.rhl
-*.bak
-~$*
-*.3dmbak
-
-# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 *.egg-info/
-
-# OS
+dist/
+build/
 .DS_Store
 Thumbs.db
-
-# IDE
-.vscode/
-.idea/
+*.xlsx
+*.3dm
+*.gh

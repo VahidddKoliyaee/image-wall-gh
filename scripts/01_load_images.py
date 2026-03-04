@@ -1,22 +1,12 @@
-"""
-01_load_images.py — Load image file paths from a folder.
-
-=== GRASSHOPPER COMPONENT SETUP ===
-Component: GhPython (Rhino 8 Script Editor or legacy GhPython)
-Inputs:
-    repo_root  (str)  - Panel with path to repo clone, e.g. "C:\Users\You\repos\image-wall-gh"
-    img_folder (str)  - Optional override folder path. If empty, uses repo_root/images/
-Outputs:
-    image_paths (list) - List of full image file paths
-    count       (int)  - Number of images found
-    status      (str)  - Status message
-"""
+# 01_load_images.py - Load image file paths from a folder.
+# Inputs: repo_root (str), img_folder (str)
+# Outputs: image_paths (list), count (int), status (str)
 
 import os
 import sys
 
 # --- Resolve paths ---
-_repo = str(repo_root).strip().strip('"').replace("\\", "/") if repo_root else ""
+
 if not _repo:
     status = "ERROR: Set repo_root panel to your clone path"
     image_paths = []
