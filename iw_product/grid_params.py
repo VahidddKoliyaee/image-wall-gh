@@ -2,8 +2,8 @@
 Module 02: Grid Parameters
 ============================
 Computes derived grid parameters from the config dictionary.
-Replaces: Style routing (Equality checks + Gate indices), grid spacing
-calculations, Series generators, VERTICAL? flag, panel dimension validation.
+Includes accurate brake leg depths and stretchout per style
+from the original GH definition.
 
 Usage:
     from iw_product.grid_params import compute_grid_params
@@ -12,16 +12,43 @@ Usage:
 
 import math
 
+# Brake leg depths per style index [primary, secondary]
+# From GH "Brake Leg Depths" panels:
+#   Primary:   6, 4, 2.75, 2.75, 0
+#   Secondary: 2, 1.5, 0, 0, 0
+BRAKE_LEG_TABLE = {
+    # style_index: (primary_depth, secondary_depth)
+    0: (6.0, 2.0),      # Double Return Long Span
+    1: (4.0, 1.5),      # Double Return Short Span
+    2: (2.75, 0.0),     # Droplock Hat Channel
+    3: (2.75, 0.0),     # Droplock Mullion
+    4: (0.0, 0.0),      # Flat (no legs at all)
+}
+
+# Style name → index mapping
+STYLE_LIST = [
+    "Double Return Long Span [Horizontal]",   # 0
+    "Double Return Long Span [Vertical]",      # 1
+    "Double Return Short Span [Horizontal]",   # 2
+    "Double Return Short Span [Vertical]",     # 3
+    "Droplock Hat Channel",                    # 4
+    "Droplock Mullion",                        # 5
+    "Flat [Horizontal]",                       # 6
+    "Flat [Vertical]",                         # 7
+]
+
+# Map 8 styles to 5 brake leg indices:
+# 0,1 → brake idx 0 (Long Span)
+# 2,3 → brake idx 1 (Short Span)
+# 4   → brake idx 2 (Hat Channel)
+# 5   → brake idx 3 (Mullion)
+# 6,7 → brake idx 4 (Flat)
+STYLE_TO_BRAKE_INDEX = {0: 0, 1: 0, 2: 1, 3: 1, 4: 2, 5: 3, 6: 4, 7: 4}
+
 
 def compute_grid_params(config):
     """
     Compute all derived grid parameters from the project config.
-
-    Args:
-        config: dict from config_loader.load_config()
-
-    Returns:
-        dict with all derived grid parameters.
     """
     style = config["style"]
     vertical = config["vertical"]
@@ -32,26 +59,11 @@ def compute_grid_params(config):
     grid_pattern = config["grid_pattern"]
     perf_spacing = config["perf_spacing"]
     material_thickness = config["material_thickness"]
-    smallest_perf = config["smallest_perf"]
-    min_bridge = config["min_bridge"]
 
-    # ── Style index (maps style name to numeric index) ────────────
-    # The GH definition uses Equality checks against STYLE index
-    # to route data through Pick'n'Choose / Stream Filters
-    style_list = [
-        "Double Return Long Span [Horizontal]",   # 0
-        "Double Return Long Span [Vertical]",      # 1
-        "Double Return Short Span [Horizontal]",   # 2
-        "Double Return Short Span [Vertical]",     # 3
-        "Droplock Hat Channel",                    # 4
-        "Droplock Mullion",                        # 5
-        "Flat [Horizontal]",                       # 6
-        "Flat [Vertical]",                         # 7
-    ]
-    style_index = style_list.index(style) if style in style_list else 0
+    # ── Style index ───────────────────────────────────────────────
+    style_index = STYLE_LIST.index(style) if style in STYLE_LIST else 0
 
-    # ── Gate indices (from Equality + Gate Or + Addition chains) ───
-    # These control which code paths are active for different styles
+    # ── Style flags ───────────────────────────────────────────────
     is_double_return = style_index in (0, 1, 2, 3)
     is_droplock = style_index in (4, 5)
     is_flat = style_index in (6, 7)
@@ -59,21 +71,18 @@ def compute_grid_params(config):
     is_short_span = style_index in (2, 3)
     is_horizontal = style_index in (0, 2, 6)
 
-    # Gate Index [Brake Legs]: 0=Double Return, 1=Droplock, 2=Flat
-    # From GH: Or(Equals(STYLE,0), Equals(STYLE,1), ...) → A×B(Or, 2) + ...
-    if is_double_return:
-        gate_brake_legs = 0
-    elif is_droplock:
-        gate_brake_legs = 1
-    else:
-        gate_brake_legs = 2
+    # ── Brake leg index and depths ────────────────────────────────
+    brake_index = STYLE_TO_BRAKE_INDEX.get(style_index, 4)
+    primary_leg_depth, secondary_leg_depth = BRAKE_LEG_TABLE.get(brake_index, (0, 0))
 
-    # Gate Index [Connection]: 0 or 1
-    # Double Return styles have connection type 0, others 1
+    # ── Gate indices ──────────────────────────────────────────────
+    # Gate [Brake Legs]: 0=DR Long, 1=DR Short, 2=Droplock HC, 3=Droplock Mull, 4=Flat
+    gate_brake_legs = brake_index
+
+    # Gate [Connection]: 0=Double Return, 1=Other
     gate_connection = 0 if is_double_return else 1
 
-    # Gate Index [Perf]: controls perforation approach
-    # 0 = standard circle perf, 1 = image lines, 2 = no perf
+    # Gate [Perf]: 0=standard, 1=image lines, 2=no perf
     if config["no_perf_level"]:
         gate_perf = 2
     elif grid_pattern == "Image Lines Grid":
@@ -81,47 +90,46 @@ def compute_grid_params(config):
     else:
         gate_perf = 0
 
-    # Gate Index [Stretch]: controls stretchout calculation
-    # 0 = standard, 1 = special (droplock/flat)
+    # Gate [Stretch]: 0=standard, 1=special
     gate_stretch = 0 if is_double_return else 1
 
-    # ── Grid spacing calculation ──────────────────────────────────
-    # From GH: GRID SPACING feeds into expressions for row/col spacing
-    # The definition computes min grid spacing for width and height
-    # based on smallest perf + min bridge: spacing = smallest_perf * 2 + min_bridge
-    # Then: GRID SPACING WIDTH MIN = GRID SPACING HEIGHT MIN = perf_spacing
-    # (unless overridden by diagonal patterns)
+    # ── Stretchout (bend allowance) ───────────────────────────────
+    # For sheet metal bending, stretchout = material thickness per bend
+    # Double Return has bends, Flat does not
+    if is_flat:
+        stretchout_one_side = 0.0
+    else:
+        stretchout_one_side = material_thickness
+
+    # ── Panel joint ───────────────────────────────────────────────
+    # From GH: Item(Brake Leg Depths) - PANEL JOINT
+    # Panel joint is subtracted from brake leg depth
+    # Default panel joint = 0 (typical for ImageWall)
+    panel_joint = 0.0
+
+    # Effective brake depth = primary_leg_depth - panel_joint
+    effective_primary_leg = primary_leg_depth - panel_joint
+    effective_secondary_leg = secondary_leg_depth - panel_joint
+
+    # ── Grid spacing ──────────────────────────────────────────────
     grid_spacing = perf_spacing
     grid_spacing_width_min = perf_spacing
     grid_spacing_height_min = perf_spacing
 
-    # For diagonal patterns, spacing is multiplied by sqrt(2)
     is_diagonal = "Diagonal" in grid_pattern
     if is_diagonal:
         diagonal_factor = math.sqrt(2)
         grid_spacing_width_min = perf_spacing * diagonal_factor
         grid_spacing_height_min = perf_spacing * diagonal_factor
 
-    # For "Force Square", width and height spacing are equal
     is_force_square = grid_pattern == "Force Square"
 
     # ── Panel face dimensions (before stretch) ────────────────────
-    # STRETCHOUT [1 SIDE] depends on style and material thickness
-    # Double Return: stretchout = material_thickness (one bend)
-    # Droplock/Flat: stretchout varies
-    if is_double_return:
-        stretchout_one_side = material_thickness
-    elif is_droplock:
-        stretchout_one_side = material_thickness * 2
-    else:
-        stretchout_one_side = 0.0
-
+    # Panel face = panel size - 2 * stretchout
     panel_face_width = panel_col_width - (stretchout_one_side * 2)
     panel_face_height = panel_row_height - (stretchout_one_side * 2)
 
     # ── Point grid dimensions ─────────────────────────────────────
-    # QTY OF PT GRID COLUMNS = Round(panel_face_width / grid_spacing_width_min)
-    # QTY OF PT GRID ROWS = Round(panel_face_height / grid_spacing_height_min)
     if grid_spacing_width_min > 0:
         qty_pt_grid_cols = max(1, round(panel_face_width / grid_spacing_width_min))
     else:
@@ -132,18 +140,12 @@ def compute_grid_params(config):
     else:
         qty_pt_grid_rows = 1
 
-    # TRUE GRID spacing = panel_face / qty_pt_grid (actual spacing after rounding)
     true_grid_col_spacing = panel_face_width / qty_pt_grid_cols if qty_pt_grid_cols > 0 else 0
     true_grid_row_spacing = panel_face_height / qty_pt_grid_rows if qty_pt_grid_rows > 0 else 0
 
     # ── Column/Row series ─────────────────────────────────────────
-    # Series(Start=0, Step=COLUMN_WIDTH, Count=QTY_COLUMNS)
     col_series = [i * panel_col_width for i in range(qty_columns)]
     row_series = [i * panel_row_height for i in range(qty_rows)]
-
-    # ── Panel joint (gap between panels) ──────────────────────────
-    # Default panel joint = 0 (tight fit), but can be specified
-    panel_joint = 0.0  # TODO: read from config if available
 
     # ── Overall dimensions ────────────────────────────────────────
     overall_width = qty_columns * panel_col_width
@@ -153,14 +155,13 @@ def compute_grid_params(config):
     cross_seam = config["cross_seam"]
     cross_seam_flat = cross_seam == "Default"
 
-    # ── Diagonal flag ─────────────────────────────────────────────
+    # ── Diagonal flags ────────────────────────────────────────────
     is_diagonal_vertical = grid_pattern == "Force Diagonal - Vertical"
     is_diagonal_horizontal = grid_pattern == "Force Diagonal - Horizontal"
 
     # ── Invert ────────────────────────────────────────────────────
     invert = config["invert_image"]
 
-    # ── Build output dict ─────────────────────────────────────────
     return {
         # Style routing
         "style_index": style_index,
@@ -177,6 +178,13 @@ def compute_grid_params(config):
         "gate_connection": gate_connection,
         "gate_perf": gate_perf,
         "gate_stretch": gate_stretch,
+
+        # Brake legs (from GH Brake Leg Depths panels)
+        "brake_index": brake_index,
+        "primary_leg_depth": primary_leg_depth,
+        "secondary_leg_depth": secondary_leg_depth,
+        "effective_primary_leg": effective_primary_leg,
+        "effective_secondary_leg": effective_secondary_leg,
 
         # Grid spacing
         "grid_spacing": grid_spacing,
@@ -217,7 +225,7 @@ def compute_grid_params(config):
 
 
 if __name__ == "__main__":
-    import sys, json
+    import sys
     sys.path.insert(0, ".")
     from config_loader import load_config
 
@@ -226,14 +234,7 @@ if __name__ == "__main__":
     gp = compute_grid_params(config)
 
     print("Style: {} (index={})".format(config["style"], gp["style_index"]))
-    print("Vertical: {}".format(gp["vertical"]))
-    print("Gates: brake={}, conn={}, perf={}, stretch={}".format(
-        gp["gate_brake_legs"], gp["gate_connection"],
-        gp["gate_perf"], gp["gate_stretch"]))
-    print("Grid spacing: {} (true: {}x{})".format(
-        gp["grid_spacing"], gp["true_grid_col_spacing"], gp["true_grid_row_spacing"]))
+    print("Brake legs: primary={}, secondary={}".format(
+        gp["primary_leg_depth"], gp["secondary_leg_depth"]))
+    print("Stretchout: {}".format(gp["stretchout_one_side"]))
     print("Panel face: {} x {}".format(gp["panel_face_width"], gp["panel_face_height"]))
-    print("Pt grid: {} x {}".format(gp["qty_pt_grid_cols"], gp["qty_pt_grid_rows"]))
-    print("Col series: {}".format(gp["col_series"]))
-    print("Row series: {}".format(gp["row_series"]))
-    print("Overall: {} x {}".format(gp["overall_width"], gp["overall_height"]))

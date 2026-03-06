@@ -3,43 +3,51 @@ GH Wrapper: Panel Faces
 Paste into a GhPython 3 component.
 
 INPUTS:
-    RepoPath   : str    - Path to IMAGE-WALL-GH repo
-    Config     : object - Config dict from gh_01
-    GridParams : object - Grid params dict from gh_02
-    Grid       : object - Grid dict from gh_03 or gh_04
+    RepoPath : str  - Path to IMAGE-WALL-GH repo
+    Done3    : bool - Wire from gh_03 Done3 output
 
 OUTPUTS:
-    Faces            : object
+    Done5            : bool
     TotalAreaSqFt    : float
-    PanelRowCol      : list
-    ConnectionPoints : list[Point3d]
+    ConnectionPoints : list - Point3d for fastener locations
 """
 
-import sys, os
+import sys
+import os
 
-Faces = None
+Done5 = False
 TotalAreaSqFt = 0.0
-PanelRowCol = []
 ConnectionPoints = []
 
-if not Config or not GridParams or not Grid:
-    print("Waiting for inputs")
-elif not RepoPath or not os.path.isdir(RepoPath):
-    print("ERROR: Set RepoPath")
+if not Done3:
+    print("Waiting for gh_03")
 else:
-    if RepoPath not in sys.path:
-        sys.path.insert(0, RepoPath)
-    for mod in list(sys.modules):
-        if mod.startswith("iw_product"):
-            del sys.modules[mod]
+    rp = str(RepoPath)
+    if rp not in sys.path:
+        sys.path.insert(0, rp)
 
+    if "iw_product.panel_faces" in sys.modules:
+        del sys.modules["iw_product.panel_faces"]
+
+    from iw_product import shared
     from iw_product.panel_faces import build_panel_faces
-    Faces = build_panel_faces(Config, GridParams, Grid)
 
-    TotalAreaSqFt = Faces["total_area_sqft"]
-    PanelRowCol = Faces["panel_row_col"]
-    ConnectionPoints = Faces["connection_points"]
+    config = shared.get("config")
+    grid_params = shared.get("grid_params")
+    grid = shared.get("grid")
 
-    print("Total area: {:.1f} sq ft".format(TotalAreaSqFt))
-    print("{} connection points".format(len(ConnectionPoints)))
-    print("Corners: {}".format(Faces["corner_indices"]))
+    if not config or not grid_params or not grid:
+        print("ERROR: Missing data. Check previous modules.")
+    else:
+        faces = build_panel_faces(config, grid_params, grid)
+        shared.put("faces", faces)
+        Done5 = True
+
+        TotalAreaSqFt = faces["total_area_sqft"]
+        ConnectionPoints = faces["connection_points"]
+
+        print("Total area: {:.1f} sq ft".format(TotalAreaSqFt))
+        print("{} connection points".format(len(ConnectionPoints)))
+        print("Face sizes: {:.2f} x {:.2f} in".format(
+            faces["panel_face_widths"][0], faces["panel_face_heights"][0]))
+        print("Corners: {}".format(faces["corner_indices"]))

@@ -3,41 +3,41 @@ GH Wrapper: Grid Parameters
 Paste into a GhPython 3 component.
 
 INPUTS:
-    RepoPath  : str - Path to IMAGE-WALL-GH repo
-    ConfigKey : str - Key from gh_01 ("iw_config")
+    RepoPath : str  - Path to IMAGE-WALL-GH repo
+    Done     : bool - Wire from gh_01 Done output
 
 OUTPUTS:
-    GridKey   : str - Key to retrieve grid params ("iw_grid_params")
+    Done2    : bool - True when grid params are computed
 """
 
 import sys
 import os
-import scriptcontext as sc
 
-GridKey = ""
+Done2 = False
 
-if not ConfigKey:
-    print("Waiting for ConfigKey from gh_01")
+if not Done:
+    print("Waiting for gh_01 to finish")
 else:
-    config = sc.sticky.get(str(ConfigKey))
+    rp = str(RepoPath)
+    if rp not in sys.path:
+        sys.path.insert(0, rp)
+
+    # Do NOT reimport shared — we need the same instance that gh_01 wrote to
+    # Only reimport the grid_params module
+    if "iw_product.grid_params" in sys.modules:
+        del sys.modules["iw_product.grid_params"]
+
+    from iw_product import shared
+    from iw_product.grid_params import compute_grid_params
+
+    config = shared.get("config")
     if not config or not isinstance(config, dict):
-        print("ERROR: Config not found in sticky. Run gh_01 first.")
-    elif not RepoPath:
-        print("ERROR: Set RepoPath")
+        print("ERROR: Config not found. Check gh_01.")
+        print("shared._store keys: {}".format(list(shared._store.keys())))
     else:
-        rp = str(RepoPath)
-        if rp not in sys.path:
-            sys.path.insert(0, rp)
-
-        for mod in list(sys.modules):
-            if mod.startswith("iw_product"):
-                del sys.modules[mod]
-
-        from iw_product.grid_params import compute_grid_params
         gp = compute_grid_params(config)
-
-        sc.sticky["iw_grid_params"] = gp
-        GridKey = "iw_grid_params"
+        shared.put("grid_params", gp)
+        Done2 = True
 
         print("Style: {} (idx={}, vert={})".format(
             config["style"], gp["style_index"], gp["vertical"]))
@@ -47,4 +47,3 @@ else:
             gp["qty_pt_grid_cols"], gp["qty_pt_grid_rows"]))
         print("True spacing: {:.4f} x {:.4f}".format(
             gp["true_grid_col_spacing"], gp["true_grid_row_spacing"]))
-        print("Stored in sticky['iw_grid_params']")

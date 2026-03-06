@@ -2,50 +2,60 @@
 GH Wrapper: Nonuniform Grid
 Paste into a GhPython 3 component.
 
+Use this INSTEAD of gh_03 when NonUniform? is True.
+Wire Done2 from gh_02 into this.
+
 INPUTS:
-    RepoPath   : str    - Path to IMAGE-WALL-GH repo
-    Config     : object - Config dict from gh_01
-    GridParams : object - Grid params dict from gh_02
+    RepoPath : str  - Path to IMAGE-WALL-GH repo
+    Done2    : bool - Wire from gh_02 Done2 output
 
 OUTPUTS:
-    Grid             : object
-    PanelBoundaries  : list[Curve]
-    PanelFaceGrids   : list[Curve]
-    PanelNames       : list[str]
-    PtGridOrigins    : list[Point3d]
-    OverallBoundary  : Curve
+    Done4            : bool
+    PanelBoundaries  : list
+    PanelFaceGrids   : list
+    PanelNames       : list
+    PtGridOrigins    : list
+    OverallBoundary  : object
 """
 
 import sys
 import os
 
-Grid = None
+Done4 = False
 PanelBoundaries = []
 PanelFaceGrids = []
 PanelNames = []
 PtGridOrigins = []
 OverallBoundary = None
 
-if not Config or not GridParams:
-    print("Waiting for Config and GridParams")
-elif not RepoPath or not os.path.isdir(RepoPath):
-    print("ERROR: Set RepoPath")
+if not Done2:
+    print("Waiting for gh_02")
 else:
-    if RepoPath not in sys.path:
-        sys.path.insert(0, RepoPath)
+    rp = str(RepoPath)
+    if rp not in sys.path:
+        sys.path.insert(0, rp)
 
-    for mod in list(sys.modules):
-        if mod.startswith("iw_product"):
-            del sys.modules[mod]
+    if "iw_product.nonuniform_grid" in sys.modules:
+        del sys.modules["iw_product.nonuniform_grid"]
 
+    from iw_product import shared
     from iw_product.nonuniform_grid import build_nonuniform_grid
-    Grid = build_nonuniform_grid(Config, GridParams)
 
-    PanelBoundaries = Grid["panel_boundaries"]
-    PanelFaceGrids = Grid["panel_face_grids"]
-    PanelNames = Grid["panel_names"]
-    PtGridOrigins = Grid["pt_grid_origins"]
-    OverallBoundary = Grid["overall_boundary"]
+    config = shared.get("config")
+    grid_params = shared.get("grid_params")
 
-    print("{} panels: {}".format(len(PanelNames), ", ".join(PanelNames)))
-    print("{} perf grid points".format(len(PtGridOrigins)))
+    if not config or not grid_params:
+        print("ERROR: Config or GridParams not found.")
+    else:
+        grid = build_nonuniform_grid(config, grid_params)
+        shared.put("grid", grid)
+        Done4 = True
+
+        PanelBoundaries = grid["panel_boundaries"]
+        PanelFaceGrids = grid["panel_face_grids"]
+        PanelNames = grid["panel_names"]
+        PtGridOrigins = grid["pt_grid_origins"]
+        OverallBoundary = grid["overall_boundary"]
+
+        print("{} panels: {}".format(len(PanelNames), ", ".join(PanelNames)))
+        print("{} perf grid points".format(len(PtGridOrigins)))

@@ -1,12 +1,8 @@
 """
 Module 12: Brake Legs
 ======================
-Adds brake/bend leg geometry to unfolded panels, notches corners
-for folding clearance, and handles cross-seam flat conditions.
-
-Replaces: "Cross Seam Flat" + "Notch Legs" groups.
-
-This module runs inside GH/Rhino.
+Adds brake/bend leg geometry with accurate per-side depths.
+Handles cross-seam flat conditions and corner notching.
 
 Usage:
     from iw_product.brake_legs import add_brake_legs
@@ -29,41 +25,34 @@ def add_brake_legs(config, grid_params, grid, faces, unfold):
     """
     Generate brake leg geometry and corner notches.
 
-    Args:
-        config: dict from config_loader
-        grid_params: dict from grid_params
-        grid: dict from uniform/nonuniform grid
-        faces: dict from panel_faces
-        unfold: dict from panel_unfold
+    Leg depths vary by side based on vertical/horizontal orientation:
+    - Vertical: primary (top/bot), secondary (left/right)
+    - Horizontal: primary (left/right), secondary (top/bot)
 
-    Returns:
-        dict with:
-            leg_left      - list of Curve: left brake leg per panel
-            leg_right     - list of Curve: right brake leg per panel
-            leg_top       - list of Curve: top brake leg per panel
-            leg_bottom    - list of Curve: bottom brake leg per panel
-            notch_corners - list of list of Curve: corner notch rectangles
-            cross_seam_flat_edges - list of Curve: edges with no brake (cross seam)
+    Cross-seam flat: when a panel shares a horizontal seam with another panel,
+    the leg at that edge is omitted (flat edge for seaming).
     """
-    brake_depth = unfold["brake_leg_depth"]
     stretchout = unfold["stretchout"]
+    leg_t = unfold["leg_top"]
+    leg_b = unfold["leg_bottom"]
+    leg_l = unfold["leg_left"]
+    leg_r = unfold["leg_right"]
+
     panel_faces = grid["panel_face_grids"]
     panel_row_col = faces["panel_row_col"]
-    left_is_corner = faces["left_is_corner"]
-    right_is_corner = faces["right_is_corner"]
     cross_seam_flat = grid_params["cross_seam_flat"]
     qty_rows = config["qty_rows"]
+    qty_cols = config["qty_columns"]
     is_flat = grid_params["is_flat"]
 
-    leg_left = []
-    leg_right = []
-    leg_top = []
-    leg_bottom = []
+    result_leg_left = []
+    result_leg_right = []
+    result_leg_top = []
+    result_leg_bottom = []
     notch_corners = []
     cross_seam_flat_edges = []
 
-    if is_flat or brake_depth <= 0:
-        # No brake legs for flat panels
+    if is_flat or (leg_t <= 0 and leg_b <= 0 and leg_l <= 0 and leg_r <= 0):
         empty = [None] * len(panel_faces)
         return {
             "leg_left": empty, "leg_right": empty,
@@ -80,57 +69,101 @@ def add_brake_legs(config, grid_params, grid, faces, unfold):
         fy1 = bb.Max.Y
         r, c = panel_row_col[idx]
 
-        # Left leg
-        left = _make_rectangle(fx0 - brake_depth - stretchout, fy0,
-                                fx0, fy1)
-        leg_left.append(left)
+        # ── Determine actual leg depths per edge ──────────────────
+        # Cross seam flat: omit leg at shared row boundaries
+        actual_top = leg_t
+        actual_bot = leg_b
+        actual_left = leg_l
+        actual_right = leg_r
 
-        # Right leg
-        right = _make_rectangle(fx1, fy0,
-                                 fx1 + brake_depth + stretchout, fy1)
-        leg_right.append(right)
+        if cross_seam_flat:
+            # Top edge: if there's a panel above (not top row), flatten
+            if r < qty_rows - 1:
+                actual_top = 0.0
+            # Bottom edge: if there's a panel below (not bottom row), flatten
+            if r > 0:
+                actual_bot = 0.0
 
-        # Bottom leg
-        bot = _make_rectangle(fx0, fy0 - brake_depth - stretchout,
-                               fx1, fy0)
-        leg_bottom.append(bot)
+        # ── Left leg ─────────────────────────────────────────────
+        if actual_left > 0:
+            left = _make_rectangle(
+                fx0 - actual_left - stretchout, fy0,
+                fx0, fy1)
+        else:
+            left = None
+        result_leg_left.append(left)
 
-        # Top leg
-        top = _make_rectangle(fx0, fy1,
-                               fx1, fy1 + brake_depth + stretchout)
-        leg_top.append(top)
+        # ── Right leg ────────────────────────────────────────────
+        if actual_right > 0:
+            right = _make_rectangle(
+                fx1, fy0,
+                fx1 + actual_right + stretchout, fy1)
+        else:
+            right = None
+        result_leg_right.append(right)
 
-        # Corner notches (material removed at 4 corners for folding)
-        notch_w = brake_depth + stretchout
-        notches = [
-            # Bottom-left
-            _make_rectangle(fx0 - notch_w, fy0 - notch_w, fx0, fy0),
-            # Bottom-right
-            _make_rectangle(fx1, fy0 - notch_w, fx1 + notch_w, fy0),
-            # Top-right
-            _make_rectangle(fx1, fy1, fx1 + notch_w, fy1 + notch_w),
-            # Top-left
-            _make_rectangle(fx0 - notch_w, fy1, fx0, fy1 + notch_w),
-        ]
+        # ── Bottom leg ───────────────────────────────────────────
+        if actual_bot > 0:
+            bot = _make_rectangle(
+                fx0, fy0 - actual_bot - stretchout,
+                fx1, fy0)
+        else:
+            bot = None
+        result_leg_bottom.append(bot)
+
+        # ── Top leg ──────────────────────────────────────────────
+        if actual_top > 0:
+            top = _make_rectangle(
+                fx0, fy1,
+                fx1, fy1 + actual_top + stretchout)
+        else:
+            top = None
+        result_leg_top.append(top)
+
+        # ── Corner notches ───────────────────────────────────────
+        # Notches are only at corners where two legs meet
+        notches = []
+
+        # Bottom-left
+        nw_bl = (actual_left + stretchout) if actual_left > 0 else 0
+        nh_bl = (actual_bot + stretchout) if actual_bot > 0 else 0
+        if nw_bl > 0 and nh_bl > 0:
+            notches.append(_make_rectangle(fx0 - nw_bl, fy0 - nh_bl, fx0, fy0))
+
+        # Bottom-right
+        nw_br = (actual_right + stretchout) if actual_right > 0 else 0
+        nh_br = (actual_bot + stretchout) if actual_bot > 0 else 0
+        if nw_br > 0 and nh_br > 0:
+            notches.append(_make_rectangle(fx1, fy0 - nh_br, fx1 + nw_br, fy0))
+
+        # Top-right
+        nw_tr = (actual_right + stretchout) if actual_right > 0 else 0
+        nh_tr = (actual_top + stretchout) if actual_top > 0 else 0
+        if nw_tr > 0 and nh_tr > 0:
+            notches.append(_make_rectangle(fx1, fy1, fx1 + nw_tr, fy1 + nh_tr))
+
+        # Top-left
+        nw_tl = (actual_left + stretchout) if actual_left > 0 else 0
+        nh_tl = (actual_top + stretchout) if actual_top > 0 else 0
+        if nw_tl > 0 and nh_tl > 0:
+            notches.append(_make_rectangle(fx0 - nw_tl, fy1, fx0, fy1 + nh_tl))
+
         notch_corners.append(notches)
 
-        # Cross seam flat: if panel is at a row boundary and cross_seam_flat,
-        # the top/bottom legs may be omitted
+        # ── Cross seam flat edges ────────────────────────────────
         if cross_seam_flat:
-            if r > 0:
-                # Bottom edge is a cross seam
+            if r > 0 and actual_bot == 0:
                 cross_seam_flat_edges.append(
                     rg.LineCurve(rg.Point3d(fx0, fy0, 0), rg.Point3d(fx1, fy0, 0)))
-            if r < qty_rows - 1:
-                # Top edge is a cross seam
+            if r < qty_rows - 1 and actual_top == 0:
                 cross_seam_flat_edges.append(
                     rg.LineCurve(rg.Point3d(fx0, fy1, 0), rg.Point3d(fx1, fy1, 0)))
 
     return {
-        "leg_left": leg_left,
-        "leg_right": leg_right,
-        "leg_top": leg_top,
-        "leg_bottom": leg_bottom,
+        "leg_left": result_leg_left,
+        "leg_right": result_leg_right,
+        "leg_top": result_leg_top,
+        "leg_bottom": result_leg_bottom,
         "notch_corners": notch_corners,
         "cross_seam_flat_edges": cross_seam_flat_edges,
     }
