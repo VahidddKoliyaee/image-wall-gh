@@ -2,7 +2,7 @@
 Module 01: Config Loader
 =========================
 Reads IW-Product.xlsx and returns a config dictionary.
-Replaces: Excel Import groups + Manual Inputs group.
+Uses only Python standard library (zipfile + xml) — NO openpyxl needed.
 
 Usage:
     from iw_product.config_loader import load_config
@@ -10,6 +10,11 @@ Usage:
 """
 
 import os
+import re
+import zipfile
+import xml.etree.ElementTree as ET
+
+_NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
 
 def _safe_float(val, default=0.0):
@@ -35,117 +40,125 @@ def _safe_bool(val, default=False):
 
 
 def _parse_material_thickness(material_str):
-    """Extract thickness from '0.090\" AL ANOD' -> 0.090"""
     try:
         return float(material_str.split('"')[0].strip())
     except (ValueError, IndexError):
         return 0.0
 
 
-def _read_iw_parameters(ws):
-    """Read IWParameters sheet -> (params dict, dims dict)."""
-    params = {}
-    for row in range(1, ws.max_row + 1):
-        key = ws.cell(row, 1).value
-        val = ws.cell(row, 2).value
-        if key:
-            params[str(key).strip()] = val
-
-    dims = {}
-    for row in range(1, ws.max_row + 1):
-        key_e = ws.cell(row, 5).value
-        val_h = ws.cell(row, 8).value
-        if key_e:
-            dims[str(key_e).strip()] = val_h
-
-    return params, dims
+def _col_to_index(col_str):
+    result = 0
+    for ch in col_str.upper():
+        result = result * 26 + (ord(ch) - ord("A") + 1)
+    return result - 1
 
 
-def _read_iw_product(ws):
-    """Read IWProduct sheet (lookup tables)."""
-    materials = []
-    for row in range(3, ws.max_row + 1):
-        val = ws.cell(row, 2).value
-        if val:
-            materials.append(str(val))
-        else:
-            break
-
-    grid_patterns = []
-    for row in range(3, ws.max_row + 1):
-        val = ws.cell(row, 4).value
-        if val:
-            grid_patterns.append(str(val))
-        else:
-            break
-
-    styles = []
-    for row in range(3, ws.max_row + 1):
-        val = ws.cell(row, 5).value
-        if val:
-            styles.append(str(val))
-        else:
-            break
-
-    panel_sizes = []
-    for row in range(3, ws.max_row + 1):
-        w = ws.cell(row, 6).value
-        l = ws.cell(row, 7).value
-        if w and l:
-            panel_sizes.append({"width": float(w), "length": float(l)})
-        else:
-            break
-
-    surface_colors = {}
-    for row in range(13, ws.max_row + 1):
-        name = ws.cell(row, 15).value
-        rgb = ws.cell(row, 16).value
-        if name and rgb:
-            surface_colors[str(name)] = str(rgb)
-
-    return {
-        "materials": materials,
-        "grid_patterns": grid_patterns,
-        "styles": styles,
-        "panel_sizes": panel_sizes,
-        "surface_colors": surface_colors,
-    }
+def _parse_cell_ref(ref):
+    m = re.match(r"([A-Za-z]+)(\d+)", ref)
+    if not m:
+        return (0, 0)
+    return (_col_to_index(m.group(1)), int(m.group(2)))
 
 
-def _read_nonuniform_grid(ws):
-    """Read IW-NonUniformGrid sheet."""
-    if ws.max_row <= 1 and ws.max_column <= 1:
-        return None
-    rows = []
-    for row in ws.iter_rows(min_row=1, values_only=True):
-        rows.append(list(row))
-    return rows if rows else None
+def _read_xlsx(path):
+    sheets = {}
+    with zipfile.ZipFile(path, "r") as z:
+        strings = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            with z.open("xl/sharedStrings.xml") as f:
+                tree = ET.parse(f)
+                for si in tree.getroot().findall(".//s:si", _NS):
+                    parts = []
+                    for t_el in si.findall(".//s:t", _NS):
+                        if t_el.text:
+                            parts.append(t_el.text)
+                    strings.append("".join(parts))
+
+        with z.open("xl/workbook.xml") as f:
+            wb_tree = ET.parse(f)
+        wb_ns = {
+            "s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+        }
+        sheet_elems = wb_tree.getroot().findall(".//s:sheet", wb_ns)
+
+        rid_map = {}
+        with z.open("xl/_rels/workbook.xml.rels") as f:
+            rels_tree = ET.parse(f)
+        for rel in rels_tree.getroot():
+            rid_map[rel.get("Id", "")] = rel.get("Target", "")
+
+        for sheet_el in sheet_elems:
+            name = sheet_el.get("name", "")
+            rid = sheet_el.get(
+                "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
+            target = rid_map.get(rid, "")
+            if not target:
+                continue
+            sheet_path = "xl/" + target if not target.startswith("/") else target.lstrip("/")
+            if sheet_path not in z.namelist():
+                continue
+
+            cells = {}
+            with z.open(sheet_path) as f:
+                sheet_tree = ET.parse(f)
+            for row_el in sheet_tree.getroot().findall(".//s:row", _NS):
+                for cell_el in row_el.findall("s:c", _NS):
+                    ref = cell_el.get("r", "")
+                    cell_type = cell_el.get("t", "")
+                    v_el = cell_el.find("s:v", _NS)
+                    raw = v_el.text if v_el is not None else None
+                    if raw is None:
+                        is_el = cell_el.find("s:is", _NS)
+                        if is_el is not None:
+                            t_el = is_el.find(".//s:t", _NS)
+                            raw = t_el.text if t_el is not None else None
+                    if raw is None:
+                        continue
+                    if cell_type == "s":
+                        idx = int(raw)
+                        val = strings[idx] if idx < len(strings) else raw
+                    elif cell_type == "b":
+                        val = raw == "1"
+                    else:
+                        try:
+                            if "." in raw:
+                                val = float(raw)
+                            else:
+                                val = int(raw)
+                        except ValueError:
+                            val = raw
+                    col_idx, row_num = _parse_cell_ref(ref)
+                    cells[(row_num, col_idx)] = val
+            sheets[name] = cells
+    return sheets
+
+
+def _get(cells, row, col, default=None):
+    return cells.get((row, col), default)
 
 
 def load_config(excel_path):
     """
     Load full project configuration from IW-Product.xlsx.
-
-    Args:
-        excel_path: Path to the Excel file.
-
-    Returns:
-        dict with all project parameters.
-
-    Raises:
-        FileNotFoundError: If excel_path doesn't exist.
+    No external dependencies required.
     """
     if not excel_path or not os.path.exists(excel_path):
         raise FileNotFoundError("Excel file not found: {}".format(excel_path))
 
-    import openpyxl
-    wb = openpyxl.load_workbook(excel_path, data_only=True)
+    all_sheets = _read_xlsx(excel_path)
     config = {}
 
     # ── IWParameters ──────────────────────────────────────────────
-    if "IWParameters" in wb.sheetnames:
-        params, dims = _read_iw_parameters(wb["IWParameters"])
-        ws = wb["IWParameters"]
+    ws = all_sheets.get("IWParameters", {})
+    if ws:
+        params = {}
+        for row in range(1, 50):
+            key = _get(ws, row, 0)
+            val = _get(ws, row, 1)
+            if key:
+                params[str(key).strip()] = val
+
         material = str(params.get("Material", ""))
         style = str(params.get("Style", ""))
 
@@ -181,28 +194,77 @@ def load_config(excel_path):
             "surface_rgb":          str(params.get("Surface RGB", "200,200,200")),
             "transparency":         _safe_bool(params.get("Transparency")),
             "vertical":             "[Vertical]" in style,
-            "overall_height":       _safe_float(dims.get("Overall Scope Height")),
-            "overall_width":        _safe_float(dims.get("Overall Scope Width")),
-            "max_panel_length":     _safe_float(ws.cell(10, 6).value, 120.0),
-            "max_panel_width":      _safe_float(ws.cell(13, 6).value, 40.0),
+            "overall_height":       _safe_float(_get(ws, 3, 7)),
+            "overall_width":        _safe_float(_get(ws, 6, 7)),
+            "max_panel_length":     _safe_float(_get(ws, 10, 5), 120.0),
+            "max_panel_width":      _safe_float(_get(ws, 13, 5), 40.0),
         })
 
     # ── IWProduct (lookups) ───────────────────────────────────────
-    if "IWProduct" in wb.sheetnames:
-        lookups = _read_iw_product(wb["IWProduct"])
-        config["material_list"] = lookups["materials"]
-        config["style_list"] = lookups["styles"]
-        config["grid_pattern_list"] = lookups["grid_patterns"]
-        config["panel_sizes"] = lookups["panel_sizes"]
-        config["surface_colors"] = lookups["surface_colors"]
+    ws2 = all_sheets.get("IWProduct", {})
+    if ws2:
+        materials = []
+        for row in range(3, 50):
+            val = _get(ws2, row, 1)
+            if val:
+                materials.append(str(val))
+            else:
+                break
+
+        grid_patterns = []
+        for row in range(3, 50):
+            val = _get(ws2, row, 3)
+            if val:
+                grid_patterns.append(str(val))
+            else:
+                break
+
+        styles = []
+        for row in range(3, 50):
+            val = _get(ws2, row, 4)
+            if val:
+                styles.append(str(val))
+            else:
+                break
+
+        panel_sizes = []
+        for row in range(3, 50):
+            w = _get(ws2, row, 5)
+            l = _get(ws2, row, 6)
+            if w and l:
+                panel_sizes.append({"width": float(w), "length": float(l)})
+            else:
+                break
+
+        surface_colors = {}
+        for row in range(13, 60):
+            name = _get(ws2, row, 14)
+            rgb = _get(ws2, row, 15)
+            if name and rgb:
+                surface_colors[str(name)] = str(rgb)
+
+        config["material_list"] = materials
+        config["style_list"] = styles
+        config["grid_pattern_list"] = grid_patterns
+        config["panel_sizes"] = panel_sizes
+        config["surface_colors"] = surface_colors
 
     # ── IW-NonUniformGrid ─────────────────────────────────────────
-    if "IW-NonUniformGrid" in wb.sheetnames:
-        config["nonuniform_grid"] = _read_nonuniform_grid(wb["IW-NonUniformGrid"])
+    ws3 = all_sheets.get("IW-NonUniformGrid", {})
+    if ws3:
+        nonuniform = []
+        for row in range(1, 200):
+            row_vals = []
+            for col in range(0, 50):
+                val = _get(ws3, row, col)
+                if val is not None:
+                    row_vals.append(val)
+            if row_vals:
+                nonuniform.append(row_vals)
+        config["nonuniform_grid"] = nonuniform if nonuniform else None
     else:
         config["nonuniform_grid"] = None
 
-    wb.close()
     return config
 
 
