@@ -1,10 +1,8 @@
 """
 Module 09: ImageLines
 ======================
-Handles image-mapped perforation patterns where perforation sizes vary
-based on image brightness at each point location.
-
-Supports driver curves AND direct image brightness mapping.
+Handles image-mapped perforation patterns.
+Now uses exact C# GrayScale sampler algorithm from the original GH cluster.
 
 Usage:
     from iw_product.imagelines import build_imagelines
@@ -43,28 +41,16 @@ def _build_driver_curve(pts):
 
 def build_imagelines(config, grid_params, grid, point_grid, image_data=None):
     """
-    Build image-line mapped perforations.
+    Build image-line mapped perforations using exact C# sampling algorithm.
 
-    If image_data is provided and image is loaded, brightness at each point
-    is sampled and mapped to die sizes.
+    The original C# script:
+    1. Loads image, converts to greyscale
+    2. Scans all pixels to find min/max grayscale
+    3. For each pick point, maps world coords → pixel coords
+    4. Samples grayscale at that pixel
+    5. Returns raw grayscale value (or 0 if <= min)
 
-    If driver curves are defined, they modulate the mapping region.
-
-    Args:
-        config: dict from config_loader
-        grid_params: dict from grid_params
-        grid: dict from grid
-        point_grid: dict from point_grid
-        image_data: dict from image_processor.process_image() (optional)
-
-    Returns:
-        dict with:
-            is_imagelines     - bool
-            hit_diameters     - list of float per perf point
-            hit_radii         - list of float per perf point
-            imageline_spines  - list of curves
-            driver_curve_1    - Curve or None
-            driver_curve_2    - Curve or None
+    Then downstream components map grayscale → die size.
     """
     is_imagelines = config["grid_pattern"] == "Image Lines Grid"
 
@@ -73,6 +59,7 @@ def build_imagelines(config, grid_params, grid, point_grid, image_data=None):
             "is_imagelines": False,
             "hit_diameters": [],
             "hit_radii": [],
+            "grayscale_values": [],
             "imageline_spines": [],
             "driver_curve_1": None,
             "driver_curve_2": None,
@@ -103,33 +90,39 @@ def build_imagelines(config, grid_params, grid, point_grid, image_data=None):
             if pt1 and pt2:
                 imageline_spines.append(rg.LineCurve(pt1, pt2))
 
-    # ── Map brightness to die sizes ───────────────────────────────
+    # ── Sample grayscale and map to die sizes ─────────────────────
     hit_diameters = []
     hit_radii = []
+    grayscale_values = []
 
     if image_data and image_data.get("is_loaded"):
-        # Use image brightness mapping
-        from iw_product.image_processor import sample_brightness, brightness_to_die_size
+        # Use the exact C# sampling algorithm
+        from iw_product.image_processor import sample_grayscale, grayscale_to_die_size
 
-        # Get panel bounding box for coordinate mapping
+        # MappedRegion bbox = overall panel boundary
         overall = grid.get("overall_boundary")
         if overall and HAS_RHINO:
             bb = overall.GetBoundingBox(True)
-            panel_bbox = (bb.Min.X, bb.Min.Y, bb.Max.X, bb.Max.Y)
+            mapped_bbox = (bb.Min.X, bb.Min.Y, bb.Max.X, bb.Max.Y)
         else:
             w = grid_params["overall_width"]
             h = grid_params["overall_height"]
-            panel_bbox = (0, 0, w, h)
+            mapped_bbox = (0, 0, w, h)
 
-        brightness = sample_brightness(image_data, perf_points, panel_bbox, config)
+        # Step 1: Sample grayscale at each perf point (exact C# port)
+        grayscale_values = sample_grayscale(
+            image_data, perf_points, mapped_bbox, config)
 
-        # Snap to available dies if punch_maximizer is on
+        # Step 2: Map grayscale → die sizes
         snap_dies = imagelines_die_list if punch_maximizer else None
-        hit_diameters = brightness_to_die_size(brightness, min_rect, max_rect, snap_dies)
+        hit_diameters = grayscale_to_die_size(
+            grayscale_values, min_rect, max_rect,
+            image_data["min_gray"], image_data["max_gray"],
+            snap_dies)
         hit_radii = [d / 2.0 for d in hit_diameters]
 
     elif HAS_RHINO and curve1 and curve2:
-        # Fallback: use distance-to-curves mapping
+        # Fallback: distance-to-curves mapping
         for pt in perf_points:
             success1, t1 = curve1.ClosestPoint(pt)
             success2, t2 = curve2.ClosestPoint(pt)
@@ -146,15 +139,17 @@ def build_imagelines(config, grid_params, grid, point_grid, image_data=None):
                 diameter = min_rect
             hit_diameters.append(diameter)
             hit_radii.append(diameter / 2.0)
+            grayscale_values.append(0)
     else:
-        # No image, no curves — uniform
         hit_diameters = [min_rect] * len(perf_points)
         hit_radii = [min_rect / 2.0] * len(perf_points)
+        grayscale_values = [0] * len(perf_points)
 
     return {
         "is_imagelines": True,
         "hit_diameters": hit_diameters,
         "hit_radii": hit_radii,
+        "grayscale_values": grayscale_values,
         "imageline_spines": imageline_spines,
         "driver_curve_1": curve1,
         "driver_curve_2": curve2,
